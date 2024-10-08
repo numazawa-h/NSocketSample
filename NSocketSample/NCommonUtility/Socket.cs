@@ -105,6 +105,10 @@ namespace NCommonUtility
         protected void OnRecv()
         {
             int len =_soc.Receive(_dat);
+            if (len <= 0)
+            {
+                throw new Exception($"socket receive error({len})");
+            }
             byte[] buf = new byte[len];
             Buffer.BlockCopy(_dat, 0, buf, 0, len);
             OnRecvEvent?.Invoke(this, new SendRecvEventArgs(this, buf));
