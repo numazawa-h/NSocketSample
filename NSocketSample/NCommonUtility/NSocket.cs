@@ -1,15 +1,12 @@
 ﻿using NCommonUtility;
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
 
 namespace NCommonUtility
 {
@@ -44,10 +41,10 @@ namespace NCommonUtility
     {
         protected Socket _soc = null;
         protected IPEndPoint _self_EndPoint = null;     // バインドするためのEndPoint
-        protected byte[] _dat = new byte[1024];
-        public int DataSize { 
-            get { return _dat.Length; } 
-            set { _dat = new byte[value];  } 
+        protected byte[] _recv_buf = new byte[1024];
+        public int RecvBuffSize { 
+            get { return _recv_buf.Length; } 
+            set { _recv_buf = new byte[value];  } 
         }
 
         public bool isOpen {  get { return _soc != null; } }
@@ -55,6 +52,7 @@ namespace NCommonUtility
         private int _type = 0;
         public bool isServer { get { return _type == 1; } }
         public bool isClient { get { return _type == 2; } }
+
 
         public IPAddress LocalIPAddress { get { return ((IPEndPoint)_soc?.LocalEndPoint)?.Address; } }
         public int? LocalPortno { get { return ((IPEndPoint)_soc?.LocalEndPoint)?.Port; } }
@@ -67,11 +65,12 @@ namespace NCommonUtility
         public event ThreadExceptionEventHandler OnExceptionEvent;
         public event NSocketEventHandler OnDisConnectEvent;
         public event NSocketEventHandler OnAcceptEvent;
+        public event NSocketEventHandler OnConnectEvent;
         public event SendRecvEventHandler OnRecvEvent;
         public event SendRecvEventHandler OnSendEvent;
 
         private IAsyncResult _asyncListenResult;
-        
+
         public NSocket()
         {
             _type = 0;
@@ -105,32 +104,33 @@ namespace NCommonUtility
         protected void OnAccept(NSocket socket)
         {
             OnAcceptEvent?.Invoke(this, new NSocketEventArgs(socket));
-            lock (socket)
+            // 受信スレッド起動
+            socket.StartRecvThread();
+
+            lock (this)
             {
-                if (socket._soc != null)
-                {
-                    // 受信スレッド起動
-                    socket.StartRecvThread();
-                }
+                // Acceptの処理が終わったら引き続きAcceptを待つ
+                _soc?.BeginAccept(new AsyncCallback(AcceptCallback), this);
             }
 
-            // Acceptの処理が終わったら引き続きAcceptを待つ
-            _soc.BeginAccept(new AsyncCallback(AcceptCallback), this);
         }
 
-        protected void OnRecv()
+        protected void OnConnect()
         {
-            int len =_soc.Receive(_dat);
-            if (len <= 0)
-            {
-                throw new Exception($"socket receive error({len})");
-            }
+            OnConnectEvent?.Invoke(this, new NSocketEventArgs(this));
+            // 受信スレッド起動
+            StartRecvThread();
+        }
+
+        protected virtual void OnRecv()
+        {
+            int len =_soc.Receive(_recv_buf);
             byte[] buf = new byte[len];
-            Buffer.BlockCopy(_dat, 0, buf, 0, len);
+            Buffer.BlockCopy(_recv_buf, 0, buf, 0, len);
             OnRecvEvent?.Invoke(this, new SendRecvEventArgs(this, buf));
         }
 
-        protected void OnSend(byte[] buf)
+        protected virtual void OnSend(byte[] buf)
         {
             OnSendEvent?.Invoke(this, new SendRecvEventArgs(this, buf));
         }
@@ -230,21 +230,6 @@ namespace NCommonUtility
             }
         }
 
-        public event NSocketEventHandler OnConnectEvent;
-
-        protected void OnConnect()
-        {
-            OnConnectEvent?.Invoke(this, new NSocketEventArgs(this));
-            lock (this)
-            {
-                if (_soc != null)
-                {
-                    // 受信スレッド起動
-                    StartRecvThread();
-                }
-            }
-        }
-
         public void Connect(string str_iaddr, string str_portno)
         {
             IPAddress iaddr;
@@ -286,9 +271,9 @@ namespace NCommonUtility
         }
         public void Connect(IPAddress iaddr, int portno)
         {
-            lock (this)
+            try
             {
-                try
+                lock (this)
                 {
                     if (_soc != null)
                     {
@@ -302,27 +287,11 @@ namespace NCommonUtility
                     }
                     _soc.BeginConnect(endPoint, new AsyncCallback(ConnectCallback), this);
                 }
-                catch (Exception ex)
-                {
-                    OnDisConnect();
-                    OnException(new Exception("Connect処理でエラー発生", ex));
-                }
             }
-        }
-
-        public void Send(byte[] dat)
-        {
-            try
-            {
-                byte[] buf = new byte[dat.Length];
-                Buffer.BlockCopy(dat, 0, buf, 0, dat.Length);
-
-                _soc.BeginSend(buf, 0, buf.Length, SocketFlags.None, new AsyncCallback(SendCallback), (this, buf));
-            }
-            catch (Exception e)
+            catch (Exception ex)
             {
                 OnDisConnect();
-                OnException(new Exception("送信中に例外発生", e));
+                OnException(new Exception("Connect処理でエラー発生", ex));
             }
         }
 
@@ -330,48 +299,40 @@ namespace NCommonUtility
         protected virtual void AcceptCallback(IAsyncResult ar)
         {
             NSocket socket = (NSocket)ar.AsyncState;
-            lock (socket)
+            if (socket._soc == null)
             {
-                if (socket._soc == null)
-                {
-                    return;
-                }
-                try
-                {
-                    Socket soc = socket._soc.EndAccept(ar);
-                    OnAccept(new NSocket(soc));
-                }
-                catch (Exception ex)
-                {
-                    OnDisConnect();
-                    OnException(ex);
-                }
+                return;
+            }
+            try
+            {
+                Socket soc = socket._soc.EndAccept(ar);
+                OnAccept(new NSocket(soc));
+            }
+            catch (Exception ex)
+            {
+                OnDisConnect();
+                OnException(ex);
             }
         }
 
-        private void ConnectCallback(IAsyncResult ar)
+        protected virtual void ConnectCallback(IAsyncResult ar)
         {
             NSocket socket = (NSocket)ar.AsyncState;
-            lock (socket)
+            if (socket._soc == null)
             {
-                if (socket._soc == null)
-                {
-                    return;
-                }
-                try
-                {
-                    socket._soc.EndConnect(ar);
-                    _type = 2;
-                    OnConnect();
-                }
-                catch (Exception ex)
-                {
-                    OnDisConnect();
-                    OnException(new Exception("Connect中にエラー発生", ex));
-                }
+                return;
+            }
+            try
+            {
+                socket._soc.EndConnect(ar);
+                OnConnect();
+            }
+            catch (Exception ex)
+            {
+                OnDisConnect();
+                OnException(new Exception("Connect中にエラー発生", ex));
             }
         }
-
 
         protected void StartRecvThread()
         {
@@ -405,26 +366,38 @@ namespace NCommonUtility
             }
         }
 
+        public void Send(byte[] dat)
+        {
+            try
+            {
+                byte[] buf = new byte[dat.Length];
+                Buffer.BlockCopy(dat, 0, buf, 0, dat.Length);
 
-        protected void SendCallback(IAsyncResult ar)
+                _soc?.BeginSend(buf, 0, buf.Length, SocketFlags.None, new AsyncCallback(SendCallback), (this, buf));
+            }
+            catch (Exception e)
+            {
+                OnDisConnect();
+                OnException(new Exception("送信中に例外発生", e));
+            }
+        }
+
+        protected virtual void SendCallback(IAsyncResult ar)
         {
             var (socket, buf) = ((NSocket, byte[]))ar.AsyncState;
-            lock (socket)
+            if (socket._soc == null)
             {
-                if (socket._soc == null)
-                {
-                    return;
-                }
-                try
-                {
-                    socket._soc.EndSend(ar);
-                    OnSend(buf);
-                }
-                catch (System.ObjectDisposedException ex)
-                {
-                    OnDisConnect();
-                    OnException(new Exception("ソケット送信エラー", ex));
-                }
+                return;
+            }
+            try
+            {
+                socket._soc.EndSend(ar);
+                OnSend(buf);
+            }
+            catch (System.ObjectDisposedException ex)
+            {
+                OnDisConnect();
+                OnException(new Exception("ソケット送信エラー", ex));
             }
         }
     }
