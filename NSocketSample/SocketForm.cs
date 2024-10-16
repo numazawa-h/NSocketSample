@@ -30,11 +30,11 @@ namespace SampleMain
             txt_ipAddr2.Text = socket.RemoteIPAddress.ToString();
             txt_portNo2.Text = socket.RemotePortno.ToString();
 
-            if (socket is ServerSocket)
+            if (socket.isServer)
             {
                 this.Text = "サーバーソケット";
             }
-            if (socket is ClientSocket)
+            if (socket.isClient)
             {
                 this.Text = "クライアントソケット";
             }

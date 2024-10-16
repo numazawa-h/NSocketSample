@@ -54,7 +54,7 @@ namespace SampleMain
 
         private void btn_connect_Click(object sender, EventArgs e)
         {
-            ClientSocket socket = new ClientSocket();
+            NSocket socket = new NSocket();
             socket.OnExceptionEvent += OnException;
             socket.OnConnectEvent += OnConnect;
             socket.OnDisConnectEvent += OnDisConnect;
