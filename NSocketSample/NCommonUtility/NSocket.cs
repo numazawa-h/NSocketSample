@@ -285,6 +285,7 @@ namespace NCommonUtility
                     {
                         _soc.Bind(_self_EndPoint);
                     }
+                    _type = 2;
                     _soc.BeginConnect(endPoint, new AsyncCallback(ConnectCallback), this);
                 }
             }
